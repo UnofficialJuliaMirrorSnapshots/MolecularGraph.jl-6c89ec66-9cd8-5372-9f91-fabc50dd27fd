@@ -62,7 +62,7 @@ function graphmol(graph::GraphMol{A,B}) where {A<:Atom,B<:Bond}
 end
 
 """
-    graphmol(mol::Union{GraphMol,SubgraphView{GraphMol}}) -> GraphMol
+    graphmol(mol::SubgraphView{GraphMol}) -> GraphMol
 
 Generate a new `GraphMol` from a substructure view.
 
@@ -136,3 +136,20 @@ end
 SDFile = GraphMol{SDFileAtom,SDFileBond}
 SMILES = GraphMol{SmilesAtom,SmilesBond}
 SMARTS = QueryMol{SmartsAtom,SmartsBond}
+
+
+function Base.getindex(graph::GraphMol, sym::Symbol)
+    if haskey(graph.cache, sym)
+        return graph.cache[sym]
+    else
+        return eval(Expr(:call, sym, graph))
+    end
+end
+
+function Base.getindex(view::SubgraphView, sym::Symbol)
+    if haskey(view.graph.cache, sym)
+        return view.graph.cache[sym]
+    else
+        return eval(Expr(:call, sym, view.graph))
+    end
+end
