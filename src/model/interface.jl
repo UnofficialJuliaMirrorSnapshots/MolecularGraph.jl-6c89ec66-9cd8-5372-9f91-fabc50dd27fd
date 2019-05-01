@@ -4,17 +4,8 @@
 #
 
 export
-    MolGraph, GeneralMol,
     Atom, QueryAtom,
     Bond, QueryBond
-
-
-abstract type MolGraph <: GraphView end
-abstract type GeneralMol <: MolGraph end
-
-# Union types
-# TODO: use traits
-# https://github.com/JuliaLang/julia/issues/2345
 
 
 abstract type Atom <: AbstractNode end

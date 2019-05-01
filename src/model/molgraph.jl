@@ -4,131 +4,135 @@
 #
 
 export
-    MapMol, VectorMol, QueryMol,
-    mapmol, vectormol, querymol,
+    GraphMol, QueryMol,
+    graphmol, querymol,
     SDFile, SMILES, SMARTS
 
 
-struct MapMol{A<:Atom,B<:Bond} <: GeneralMol
-    # TODO: deprecated
-    graph::MapGraph{A,B}
-    attribute::Dict{Symbol,String}
-
-    function MapMol{A,B}(graph::Graph) where {A<:Atom,B<:Bond}
-        new(graph, Dict())
-    end
-end
-
-MapMol{A,B}() where {A<:Atom,B<:Bond} = MapMol{A,B}(mapgraph(A,B))
-
-mapmol(::Type{A}, ::Type{B}) where {A<:Atom,B<:Bond} = MapMol{A,B}()
-
-function mapmol(atoms::Vector{A}, bonds::Vector{B}) where {A<:Atom,B<:Bond}
-    mol = MapMol{A,B}()
-    for (i, atom) in enumerate(atoms)
-        mol.graph.nodes[i] = atom
-        mol.graph.neighbormap[i] = Dict()
-    end
-    for (i, bond) in enumerate(bonds)
-        mol.graph.edges[i] = bond
-        mol.graph.neighbormap[bond.u][bond.v] = i
-        mol.graph.neighbormap[bond.v][bond.u] = i
-    end
-    return mol
-end
-
-function mapmol(mol::MolGraph)
-    A = nodetype(mol)
-    B = edgetype(mol)
-    newmol = MapMol{A,B}(mapgraph(mol))
-    merge!(newmol.attribute, mol.attribute)
-    return newmol
-end
-
-
-
-struct QueryMol{A<:QueryAtom,B<:QueryBond} <: MolGraph
-    graph::MapGraph{A,B}
-    connectivity::Array{Array{Int}}
-
-    function QueryMol{A,B}() where {A<:QueryAtom,B<:QueryBond}
-        new(mapgraph(A,B), [])
-    end
-end
-
-"""
-    querymol(::Type{A}, ::Type{B}
-        ) where {A<:QueryAtom,B<:QueryBond} -> QueryMol{N,E}
-
-Generate empty `QueryMol` that has atoms and bonds with the given types.
-"""
-querymol(::Type{A}, ::Type{B}
-    ) where {A<:QueryAtom,B<:QueryBond} = QueryMol{A,B}()
-
-
-struct VectorMol{A<:Atom,B<:Bond} <: GeneralMol
-    graph::VectorGraph{A,B}
-    attribute::Dict{Symbol,Any}
+struct GraphMol{A<:Atom,B<:Bond} <: OrderedGraph
+    neighbormap::Vector{Dict{Int,Int}}
+    edges::Vector{Tuple{Int,Int}}
+    nodeattrs::Vector{A}
+    edgeattrs::Vector{B}
     cache::Dict{Symbol,Any}
-
-    function VectorMol{A,B}(graph::Graph) where {A<:Atom,B<:Bond}
-        new(graph, Dict(), Dict())
-    end
-end
-
-VectorMol{A,B}() where {A<:Atom,B<:Bond} = VectorMol{A,B}(vectorgraph(A,B))
-
-
-"""
-    vectormol(::Type{A}, ::Type{B}) where {A<:Atom,B<:Bond} -> VectorMol{A,B}
-
-Generate empty `VectorMol` that has atoms and bonds with the given types.
-"""
-vectormol(::Type{A}, ::Type{B}) where {A<:Atom,B<:Bond} = VectorMol{A,B}()
-
-"""
-    vectormol(atoms::Vector{A}, bonds::Vector{B}) -> VectorMol{A,B}
-
-Generate `VectorMol` that has the given atom objects and edge objects.
-"""
-function vectormol(nodes::Vector{A}, edges::Vector{B}) where {A<:Atom,B<:Bond}
-    mol = VectorMol{A,B}()
-    for (i, node) in enumerate(nodes)
-        push!(mol.graph.nodes, node)
-        push!(mol.graph.neighbormap, Dict())
-    end
-    for (i, edge) in enumerate(edges)
-        push!(mol.graph.edges, edge)
-        mol.graph.neighbormap[edge.u][edge.v] = i
-        mol.graph.neighbormap[edge.v][edge.u] = i
-    end
-    return mol
+    attributes::Dict{Symbol,Any}
 end
 
 """
-    vectormol(mol::MolGraph; clone=false) -> VectorMol
+    graphmol() -> GraphMol
 
-Convert the given molecule into a new `VectorMol`. See [`vectorgraph`](@ref)
-for the details.
+Generate empty `GraphMol`.
 """
-function vectormol(mol::MolGraph)
-    A = nodetype(mol)
-    B = edgetype(mol)
-    newmol = VectorMol{A,B}(vectorgraph(mol))
-    merge!(newmol.attribute, mol.attribute)
-    return newmol
+graphmol(::Type{A}, ::Type{B}
+    ) where {A<:Atom,B<:Bond} = GraphMol{A,B}([], [], [], [], Dict(), Dict())
+
+"""
+    graphmol(atoms::Vector{Atom}, bonds::Vector{Bond}) -> GraphMol
+
+Generate `GraphMol` that has the given atom objects and edge objects.
+"""
+function graphmol(
+        edges, atoms::Vector{A}, bonds::Vector{B}) where {A<:Atom,B<:Bond}
+    nbrmap = [Dict{Int,Int}() for i in 1:length(atoms)]
+    edges = collect(edges)
+    for (i, (u, v)) in enumerate(edges)
+        nbrmap[u][i] = v
+        nbrmap[v][i] = u
+    end
+    return GraphMol(
+        nbrmap, edges, atoms, bonds, Dict{Symbol,Any}(), Dict{Symbol,Any}())
+end
+
+"""
+    graphmol(mol::GraphMol) -> GraphMol
+
+Copy `GraphMol`.
+"""
+function graphmol(graph::GraphMol{A,B}) where {A<:Atom,B<:Bond}
+    newg = graphmol(A, B)
+    for nbr in graph.neighbormap
+        push!(newg.neighbormap, copy(nbr))
+    end
+    append!(newg.edges, graph.edges)
+    append!(newg.nodeattrs, graph.nodeattrs)
+    append!(newg.edgeattrs, graph.edgeattrs)
+    merge!(newg.cache, graph.cache)
+    merge!(newg.attributes, graph.attributes)
+    return newg
+end
+
+"""
+    graphmol(mol::Union{GraphMol,SubgraphView{GraphMol}}) -> GraphMol
+
+Generate a new `GraphMol` from a substructure view.
+
+Graph property caches and attributes are not inherited.
+"""
+function graphmol(view::SubgraphView)
+    newg = graphmol(nodeattrtype(view), edgeattrtype(view))
+    nkeys = sort(collect(nodeset(view)))
+    ekeys = sort(collect(edgeset(view)))
+    nmap = Dict{Int,Int}()
+    for (i, n) in enumerate(nkeys)
+        nmap[n] = i
+        push!(newg.nodeattrs, nodeattr(view, n))
+        push!(newg.neighbormap, Dict())
+    end
+    for (i, e) in enumerate(ekeys)
+        (oldu, oldv) = getedge(view, e)
+        u = nmap[oldu]
+        v = nmap[oldv]
+        push!(newg.edges, (u, v))
+        push!(newg.edgeattrs, edgeattr(view, e))
+        newg.neighbormap[u][i] = v
+        newg.neighbormap[v][i] = u
+    end
+    return newg
+end
+
+
+
+struct QueryMol{A<:QueryAtom,B<:QueryBond} <: OrderedGraph
+    neighbormap::Vector{Dict{Int,Int}}
+    edges::Vector{Tuple{Int,Int}}
+    nodeattrs::Vector{A}
+    edgeattrs::Vector{B}
+    cache::Dict{Symbol,Any}
+    attributes::Dict{Symbol,Any}
+    connectivity::Vector{Vector{Int}}
+end
+
+"""
+    querymol() -> QueryMol
+
+Generate empty `QueryMol`.
+"""
+querymol(
+    ::Type{A}, ::Type{B}
+) where {A<:QueryAtom,B<:QueryBond} = QueryMol{A,B}(
+    [], [], [], [], Dict(), Dict(), [])
+
+"""
+    querymol(atoms::Vector{Atom}, bonds::Vector{Bond}) -> GraphMol
+
+Generate `QueryMol` that has the given atom objects and edge objects.
+"""
+function querymol(edges, atoms::Vector{A}, bonds::Vector{B},
+        connectivity::Vector{Vector{Int}}) where {A<:QueryAtom,B<:QueryBond}
+    nbrmap = [Dict{Int,Int}() for i in 1:length(atoms)]
+    edges = collect(edges)
+    for (i, (u, v)) in enumerate(edges)
+        nbrmap[u][i] = v
+        nbrmap[v][i] = u
+    end
+    return QueryMol(
+        nbrmap, edges, atoms, bonds,
+        Dict{Symbol,Any}(), Dict{Symbol,Any}(), connectivity)
 end
 
 
 # Aliases
-# TODO: use traits
 
-
-SDFile = MapMol{SDFileAtom,SDFileBond}
-SMILES = MapMol{SmilesAtom,SmilesBond}
+SDFile = GraphMol{SDFileAtom,SDFileBond}
+SMILES = GraphMol{SmilesAtom,SmilesBond}
 SMARTS = QueryMol{SmartsAtom,SmartsBond}
-
-
-mapmol(::Type{T}) where T <: SDFile = mapmol(SDFileAtom,SDFileBond)
-mapmol(::Type{T}) where T <: SMILES = mapmol(SmilesAtom,SmilesBond)
-querymol(::Type{T}) where T <: SMARTS = querymol(SmartsAtom,SmartsBond)
