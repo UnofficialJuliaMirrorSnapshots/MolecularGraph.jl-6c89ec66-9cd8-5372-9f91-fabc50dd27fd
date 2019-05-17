@@ -8,115 +8,119 @@ export
     findmces, mcessize
 
 
-mutable struct MCSResult
-    mapping::Dict{Int,Int}
-    isvalidinput::Bool
-    istimedout::Bool
-    istargetreached::Bool
-end
-
 
 """
-    findmcis(G::UndirectedGraph, H::UndirectedGraph; kwargs...) -> MCSResult
+    findmcis(G::UndirectedGraph, H::UndirectedGraph; kwargs...
+        ) -> Tuple{Dict{Int,Int},Symbol}
 
 Compute maximum common induced subgraph between `G` and `H`.
 
 
 ## Keyword arguments:
 
-- connectivity: `:Connected`, `:Disconnected`  (for mode=:MCS)
-- constraint: `TopologicalConstraint`, `DiameterRestriction` (for mode=:MCS)
-- timeout(Int): return suboptimal result so far if the execution time exceeded
-the given value (in second).
-- threshold(Int): return suboptimal result so far if the given mcs size
-achieved.
+- connected(Bool): if true, apply connected MCS constraint.
+- topological(Bool): if true, apply topological constraint.
+- diameter(Int): distance cutoff for topological constraint.
+- tolerance(Int): distance mismatch tolerance for topological constraint.
+- timeout(Int): abort calculation and return suboptimal results so far if the
+execution time has reached the given value (default=60, in seconds).
+- targetsize(Int): abort calculation and return suboptimal result so far if the
+given mcs size achieved.
 - nodematcher(Function): node matcher function that takes two node indices as
 arguments.
 - edgematcher(Function): edge matcher function that takes two edge indices as
 arguments.
-- theta(Int):
-    distance mismatch tolerance in topologically constrainted MCS
-- diameter(Int):
-    diameter size in MCS with diameter restriction
 """
-function findmcis(G::UndirectedGraph, H::UndirectedGraph; kwargs...)
-    res = MCSResult(Dict{Int,Int}(), false, false, false)
-    (nodecount(G) == 0 || nodecount(H) == 0) && return res
-    res.isvalidinput = true
+function findmcis(G::UndirectedGraph, H::UndirectedGraph;
+        nodematcher=(g,h)->true, edgematcher=(g,h)->true, kwargs...)
+    mapping = Dict{Int,Int}()
+    status = :invalidinput
+    (nodecount(G) == 0 || nodecount(H) == 0) && return (mapping, status)
     # Generate modular product
-    if haskey(kwargs, :constraint)
-        # TODO: constraints
-        eflt = topologicalconstraint(G, H; kwargs...)
+    if haskey(kwargs, :topological) && kwargs[:topological]
+        eflt = tpconstraintfilter(G, H, edgematcher; kwargs...)
+    else
+        eflt = modprodedgefilter(G, H, edgematcher)
     end
-    prod = modularproduct(G, H; kwargs...)
+    prod = modularproduct(
+        G, H, nodematcher=nodematcher, edgefilter=eflt; kwargs...)
     # Clique detection
-    state = FindCliqueState{ModularProduct}(prod; kwargs...)
-    for nodes in state.channel
-        if length(nodes) > length(res.mapping)
-            res.mapping = Dict(
-                nodeattr(prod, n).g => nodeattr(prod, n).h for n in nodes)
-        end
+    if haskey(kwargs, :connected) && kwargs[:connected]
+        (cliques, status) = maximalconncliques(prod; kwargs...)
+    else
+        (cliques, status) = maximalcliques(prod; kwargs...)
     end
-    res.istimedout = state.status == :timedout
-    res.istargetreached = state.status == :targetreached
-    return res
+    maxclique = sortstablemax(collect(cliques), by=length, init=[])
+    mapping = Dict(
+        nodeattr(prod, n).g => nodeattr(prod, n).h for n in maxclique)
+    return (mapping, status)
 end
 
 
+
 """
-    findmces(G::UndirectedGraph, H::UndirectedGraph; kwargs...) -> MCSResult
+    findmces(G::UndirectedGraph, H::UndirectedGraph; kwargs...
+        ) -> Tuple{Dict{Int,Int},Symbol}
 
 Compute maximum common edge induced subgraph between `G` and `H`.
 """
-function findmces(G::UndirectedGraph, H::UndirectedGraph; kwargs...)
-    res = MCSResult(Dict{Int,Int}(), false, false, false)
-    (edgecount(G) == 0 || edgecount(H) == 0) && return res
-    res.isvalidinput = true
+function findmces(G::UndirectedGraph, H::UndirectedGraph;
+        nodematcher=(g,h)->true, edgematcher=(g,h)->true, kwargs...)
+    mapping = Dict{Int,Int}()
+    status = :invalidinput
+    (edgecount(G) == 0 || edgecount(H) == 0) && return (mapping, status)
     lg = linegraph(G)
     lh = linegraph(H)
-    nmatch = (g, h) -> true
-    ematch = (g, h) -> true
-    if haskey(kwargs, :nodematcher)
-        ematch = lgedgematcher(lg, lh, kwargs[:nodematcher])
-        if haskey(kwargs, :edgematcher)
-            nmatch = lgnodematcher(
-                lg, lh, kwargs[:nodematcher], kwargs[:edgematcher])
-        end
-    end
+    ematch = lgedgematcher(lg, lh, nodematcher)
+    nmatch = lgnodematcher(lg, lh, nodematcher, edgematcher)
     # Generate modular product
-    if haskey(kwargs, :constraint)
-        # TODO: constraints
-        eflt = topologicalconstraint(G, H; kwargs...)
+    if haskey(kwargs, :topological) && kwargs[:topological]
+        eflt = tpconstraintfilter(lg, lh, ematch; kwargs...)
+    else
+        eflt = modprodedgefilter(lg, lh, ematch)
     end
-    eflt = modprodedgefilter(lg, lh, ematch)
     prod = modularproduct(lg, lh, nodematcher=nmatch, edgefilter=eflt)
     # Clique detection
-    state = FindCliqueState{ModularProduct}(prod; kwargs...)
-    for edges in state.channel
-        length(edges) > length(res.mapping) || continue
+    if haskey(kwargs, :connected) && kwargs[:connected]
+        (cliques, status) = maximalconncliques(prod; kwargs...)
+    else
+        (cliques, status) = maximalcliques(prod; kwargs...)
+    end
+    for edges in cliques
+        length(edges) > length(mapping) || continue
         mp = Dict(nodeattr(prod, e).g => nodeattr(prod, e).h for e in edges)
         delta_y_correction!(mp, G, H)
-        if length(mp) > length(res.mapping)
-            res.mapping = mp
+        if length(mp) > length(mapping)
+            mapping = mp
         end
     end
-    res.istimedout = state.status == :timedout
-    res.istargetreached = state.status == :targetreached
-    return res
+    return (mapping, status)
 end
+
 
 
 function modprodedgefilter(G, H, edgematcher)
     return function (g1, g2, h1, h2)
-        if hasedge(G, g1, g2) != hasedge(H, h1, h2)
-            return false
-        elseif !hasedge(G, g1, g2) && !hasedge(H, h1, h2)
-            return true
-        else
-            return edgematcher(findedgekey(G, g1, g2), findedgekey(H, h1, h2))
-        end
+        hasedge(G, g1, g2) == hasedge(H, h1, h2) || return false
+        !hasedge(G, g1, g2) && !hasedge(H, h1, h2) && return true
+        return edgematcher(findedgekey(G, g1, g2), findedgekey(H, h1, h2))
     end
 end
+
+
+function tpconstraintfilter(
+        G, H, edgematcher; diameter=typemax(Int), tolerance=0, kwargs...)
+    gdist = Dict(n => bfsdepth(adjacencies, G, n) for n in nodeset(G))
+    hdist = Dict(n => bfsdepth(adjacencies, H, n) for n in nodeset(H))
+    return function (g1, g2, h1, h2)
+        gdist[g1][g2] > diameter && return false
+        hdist[h1][h2] > diameter && return false
+        abs(gdist[g1][g2] - hdist[h1][h2]) > tolerance && return false
+        !hasedge(G, g1, g2) && !hasedge(H, h1, h2) && return true
+        return edgematcher(findedgekey(G, g1, g2), findedgekey(H, h1, h2))
+    end
+end
+
 
 
 """
@@ -124,7 +128,7 @@ end
 
 Return the maximum common induced subgraph size (number of nodes).
 """
-mcissize(G, H; kwargs...) = length(findmcis(G, H; kwargs...).mapping)
+mcissize(G, H; kwargs...) = length(findmcis(G, H; kwargs...)[1])
 
 
 """
@@ -132,4 +136,4 @@ mcissize(G, H; kwargs...) = length(findmcis(G, H; kwargs...).mapping)
 
 Return the maximum common edge induced subgraph size (number of edges).
 """
-mcessize(G, H; kwargs...) = length(findmces(G, H; kwargs...).mapping)
+mcessize(G, H; kwargs...) = length(findmces(G, H; kwargs...)[1])
